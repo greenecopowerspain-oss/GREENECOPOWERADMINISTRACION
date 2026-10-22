@@ -722,16 +722,18 @@ function hacerPdf(d, guardarEnDrive) {
     holder.innerHTML = '<div class="doc">' + htmlDoc(d) + '</div>';
     document.body.appendChild(holder);
     var el = holder.firstChild;
-    var opt = { margin: 0, filename: nombrePdf(d), image: { type: 'jpeg', quality: 0.96 }, html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: 794 },
+    var opt = { margin: 0, filename: nombrePdf(d), image: { type: 'jpeg', quality: 0.92 }, html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: 794 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['legacy'] } };
     return html2pdf().set(opt).from(el).outputPdf('blob').then(function (blob) {
       holder.remove();
       descargar(blob, nombrePdf(d));
+      busy(false);
       if (!guardarEnDrive || !d.id) return;
-      busy(true, 'Guardando copia en Drive…');
-      return blobToB64(blob).then(function (b64) { return call('savePdf', d.id, b64, nombrePdf(d)); }).then(function (r) {
+      // La copia en Drive se sube por detrás: se puede seguir usando la app.
+      blobToB64(blob).then(function (b64) { return call('savePdf', d.id, b64, nombrePdf(d), d.tipo, d.fecha); }).then(function (r) {
         if (r && r.ok) { var cur = docPorId(d.id); if (cur) cur.pdfId = r.pdfId; d.pdfId = r.pdfId; }
-      });
+        else toast('El PDF se descargó, pero no se pudo guardar la copia en Drive.', true);
+      }).catch(function () { });
     }, function (e) { holder.remove(); throw e; });
   }).catch(function (e) { if (String(e && e.message) !== 'auth') toast('No se pudo crear el PDF.', true); })
     .then(function () { busy(false); });
@@ -930,11 +932,14 @@ function guardarDoc(conPdf) {
     if (r.doc.origenId) { var o = docPorId(r.doc.origenId); if (o) o.estado = 'facturado'; }
     if (r.ajustes) S.aj = r.ajustes;
     guardarClienteLocal(r.doc);
-    var lst = r.listado;
-    if (lst && lst.err) toast('Factura ' + r.doc.numero + ' guardada, pero no se pudo apuntar en el listado: ' + lst.err, true);
-    else toast((r.doc.tipo === 'factura' ? 'Factura ' : 'Presupuesto ') + r.doc.numero + ' guardado' + (lst && lst.ok ? ' y apuntado en el listado' : ''));
-    var after = conPdf ? hacerPdf(r.doc, true) : Promise.resolve();
-    return after.then(function () { HIST.tipo = r.doc.tipo; ir('historial'); });
+    var doc = r.doc;
+    toast((doc.tipo === 'factura' ? 'Factura ' : 'Presupuesto ') + doc.numero + ' guardado');
+    HIST.tipo = doc.tipo; ir('historial');
+    // En segundo plano, sin hacer esperar: cliente y listado de Drive, y la copia del PDF.
+    call('despues', doc.id).then(function (x) {
+      if (x && x.listado && x.listado.err) toast('Factura ' + doc.numero + ' guardada, pero no se pudo apuntar en el listado: ' + x.listado.err, true);
+    }).catch(function () { });
+    if (conPdf) hacerPdf(doc, true);
   }).catch(function (e) { busy(false); if (String(e && e.message) !== 'auth') toast('No se pudo guardar. Revisa la conexión.', true); })
     .then(function () { btns.forEach(function (b) { b.disabled = false; }); });
 }
