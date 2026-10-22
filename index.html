@@ -463,14 +463,17 @@ function call(fn) {
     : new Promise(function (res, rej) { google.script.run.withSuccessHandler(res).withFailureHandler(rej).api(S.token, fn, args); });
   return p.then(function (r) {
     if (r && r.err === 'auth') { salir(true); throw new Error('auth'); }
+    if (r && r.ok && fn !== 'bootstrap' && fn !== 'getFile') setTimeout(guardarCopia, 50);
     return r;
   });
 }
-function post(body) {
-  return fetch(API_URL, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }).then(function (r) {
+function post(body, ms) {
+  var ctl = window.AbortController ? new AbortController() : null, tm = ctl && setTimeout(function () { ctl.abort(); }, ms || 45000);
+  return fetch(API_URL, { method: 'POST', body: JSON.stringify(body), redirect: 'follow', signal: ctl ? ctl.signal : undefined }).then(function (r) {
+    clearTimeout(tm);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
-  });
+  }, function (e) { clearTimeout(tm); throw e; });
 }
 function login(pw) {
   if (DEMO) return Promise.resolve(MOCK.login(pw));
@@ -483,7 +486,7 @@ $('#loginForm').onsubmit = function (e) {
   e.preventDefault();
   var b = $('#loginBtn'); b.disabled = true; b.textContent = 'Entrando…'; $('#loginErr').textContent = '';
   login($('#pw').value).then(function (r) {
-    if (r && r.ok) { S.token = r.token; try { sessionStorage.setItem('gep_tk', r.token); } catch (err) { } $('#pw').value = ''; return r.docs ? entrar(r) : cargar(); }
+    if (r && r.ok) { S.token = r.token; try { localStorage.setItem('gep_tk', r.token); } catch (err) { } $('#pw').value = ''; if (r.docs) { entrar(r); guardarCopia(); return; } return cargar(); }
     $('#loginErr').textContent = 'Contraseña incorrecta.';
   }).catch(function (err) { $('#loginErr').textContent = 'No se pudo conectar. ' + (err && err.message || ''); })
     .then(function () { b.disabled = false; b.textContent = 'Entrar'; });
@@ -492,9 +495,22 @@ function cargar() {
   busy(true, 'Cargando…');
   return call('bootstrap').then(function (r) {
     if (!r || r.err) throw new Error(r && r.msg || 'error');
-    entrar(r);
+    entrar(r); guardarCopia();
   }).catch(function (e) { if (String(e && e.message) !== 'auth') toast('No se pudieron cargar los datos.', true); })
     .then(function () { busy(false); });
+}
+/* Copia de los datos en el móvil: la app abre al instante y se pone al día por detrás. */
+function guardarCopia() {
+  try { localStorage.setItem('gep_datos', JSON.stringify({ ajustes: S.aj, docs: S.docs.filter(function (d) { return !d._pend; }), gastos: S.gastos.filter(function (g) { return !g._pend; }), clientes: S.clientes, sheetUrl: S.sheetUrl, folderUrl: S.folderUrl, iaLista: S.iaLista })); } catch (e) { }
+}
+function ponerAlDia() {
+  return call('bootstrap').then(function (r) {
+    if (!r || r.err) return;
+    var pend = S.docs.filter(function (d) { return d._pend; }), pendG = S.gastos.filter(function (g) { return g._pend; });
+    S.aj = r.ajustes; S.docs = r.docs.concat(pend); S.gastos = r.gastos.concat(pendG); S.clientes = r.clientes; S.sheetUrl = r.sheetUrl; S.folderUrl = r.folderUrl; S.iaLista = !!r.iaLista;
+    guardarCopia(); pintarNav();
+    if (VIEW !== 'editor') { marcar(VIEW); refrescarVista(); }
+  }).catch(function () { });
 }
 function entrar(r) {
   if (true) {
@@ -519,7 +535,7 @@ function cargarPdfLib() {
   return _h2p;
 }
 function salir(caducada) {
-  S.token = null; try { sessionStorage.removeItem('gep_tk'); } catch (e) { }
+  S.token = null; try { localStorage.removeItem('gep_tk'); localStorage.removeItem('gep_datos'); sessionStorage.removeItem('gep_tk'); } catch (e) { }
   $('#app').classList.add('hide'); $('#login').classList.remove('hide'); closeModal();
   if (caducada) $('#loginErr').textContent = 'La sesión ha caducado. Vuelve a entrar.';
 }
@@ -985,7 +1001,7 @@ function correrCola() {
   CORRIENDO = true;
   var p = job.kind === 'doc' ? enviarDoc(job) : enviarGasto(job);
   p.then(function () {
-    COLA.splice(COLA.indexOf(job), 1); guardarCola();
+    COLA.splice(COLA.indexOf(job), 1); guardarCola(); guardarCopia();
     CORRIENDO = false; pintarCola(); correrCola();
   }, function (e) {
     CORRIENDO = false;
@@ -1032,6 +1048,9 @@ function refrescarVista() {
   if (!$('#ov').classList.contains('hide')) return;
   if (VIEW === 'historial') listaHist(); else if (VIEW === 'gastos') listaGastos(); else if (VIEW === 'inicio') vInicio();
 }
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible' && S.token && !DEMO && !COLA.length && Date.now() - (ponerAlDia._t || 0) > 60000) { ponerAlDia._t = Date.now(); ponerAlDia(); }
+});
 window.addEventListener('beforeunload', function (e) { if (COLA.length) { e.preventDefault(); e.returnValue = ''; } });
 
 function guardarClienteLocal(d) {
@@ -1519,8 +1538,12 @@ var MOCK = {};
 /* =================== Arranque =================== */
 (function () {
   if (DEMO) $('#demoNote').classList.remove('hide');
-  var tk = null; try { tk = sessionStorage.getItem('gep_tk'); } catch (e) { }
-  if (tk) { S.token = tk; cargar(); } else setTimeout(function () { $('#pw').focus(); }, 100);
+  var tk = null, copia = null;
+  try { tk = localStorage.getItem('gep_tk') || sessionStorage.getItem('gep_tk'); copia = JSON.parse(localStorage.getItem('gep_datos') || 'null'); } catch (e) { }
+  if (DEMO) { tk = null; copia = null; }
+  if (tk && copia) { S.token = tk; entrar(copia); ponerAlDia(); }      // abre al instante con lo último que había
+  else if (tk) { S.token = tk; cargar(); }
+  else setTimeout(function () { $('#pw').focus(); }, 100);
 })();
 </script>
 </body>
