@@ -138,6 +138,11 @@ input[readonly]{background:#f3f6f4;color:var(--mut)}
 .mic.on{background:var(--red);box-shadow:0 0 0 0 #cf3f3f88;animation:pulse 1.2s infinite}
 @keyframes pulse{0%{box-shadow:0 0 0 0 #cf3f3f66}70%{box-shadow:0 0 0 14px #cf3f3f00}100%{box-shadow:0 0 0 0 #cf3f3f00}}
 .chip.ok{background:var(--g3);color:var(--g2)}
+.cola{position:fixed;right:18px;top:16px;z-index:70;background:#fff;border:1.5px solid var(--g4);color:var(--g2);font-weight:800;font-size:14px;padding:9px 14px;border-radius:999px;box-shadow:0 8px 24px #0a3a1a1f;display:flex;align-items:center;gap:8px}
+.cola.ok{border-color:var(--g);background:var(--g3)}
+.cola.bad{border-color:var(--red);color:var(--red);background:var(--red2);cursor:pointer}
+.mini-spin{width:12px;height:12px;border:2px solid var(--g4);border-top-color:var(--g);border-radius:50%;display:inline-block;animation:sp .8s linear infinite}
+@media (max-width:900px){.cola{top:auto;bottom:84px;right:12px}}
 /* ---- Listas ---- */
 .tabs{display:inline-flex;background:#fff;border:1px solid var(--line);border-radius:14px;padding:4px;gap:4px}
 .tabs button{border:0;background:none;padding:10px 18px;border-radius:10px;font-weight:800;color:var(--mut)}
@@ -349,6 +354,7 @@ input[readonly]{background:#f3f6f4;color:var(--mut)}
 
 <div id="printArea"></div>
 <div id="toast"></div>
+<div id="cola" class="cola hide"></div>
 <div id="busy" class="busy hide"><div class="spin"></div><div id="busyMsg">Un momento…</div></div>
 <div id="ov" class="ov hide"><div class="modal" id="modal"></div></div>
 <input type="file" id="fileIn" class="hide">
@@ -496,6 +502,7 @@ function entrar(r) {
     $('#login').classList.add('hide'); $('#app').classList.remove('hide');
     $('#demoBanner').classList.toggle('hide', !DEMO);
     pintarNav(); ir('inicio');
+    recuperarCola();
   }
   setTimeout(function () { cargarPdfLib().catch(function () { }); }, 1500);   // la librería del PDF se carga después, sin hacer esperar
 }
@@ -599,11 +606,11 @@ function vInicio() {
     '<div class="two">' +
     '<div class="card"><h3>Pendientes de cobro <span class="chip pendiente">' + pend.length + '</span></h3>' +
     (pend.length ? pend.slice(0, 8).map(function (d) {
-      return '<div class="mini"><div class="t"><b>Nº ' + esc(d.numero) + ' · ' + esc(d.cliente || 'Sin cliente') + '</b><span>' + fCorta(d.fecha) + '</span></div><div class="a">' + eur(d.total) + '</div><button class="btn sm" data-cobrar="' + d.id + '">Cobrada</button></div>';
+      return '<div class="mini"><div class="t"><b>Nº ' + esc(d.numero) + ' · ' + esc(d.cliente || 'Sin cliente') + '</b><span>' + fCorta(d.fecha) + '</span></div><div class="a">' + eur(d.total) + '</div>' + (d._pend ? '<span class="chip pendiente">Guardando…</span>' : '<button class="btn sm" data-cobrar="' + d.id + '">Cobrada</button>') + '</div>';
     }).join('') : '<div class="empty" style="padding:20px"><b>Todo cobrado</b>No hay facturas pendientes.</div>') + '</div>' +
     '<div class="card"><h3>Presupuestos esperando respuesta <span class="chip pendiente">' + pres.length + '</span></h3>' +
     (pres.length ? pres.slice(0, 8).map(function (d) {
-      return '<div class="mini"><div class="t"><b>' + esc(d.cliente || 'Sin cliente') + '</b><span>Nº ' + esc(d.numero) + ' · ' + fCorta(d.fecha) + '</span></div><div class="a">' + eur(d.total) + '</div><button class="btn sm yel" data-afac="' + d.id + '">' + ic('go') + 'Factura</button></div>';
+      return '<div class="mini"><div class="t"><b>' + esc(d.cliente || 'Sin cliente') + '</b><span>Nº ' + esc(d.numero) + ' · ' + fCorta(d.fecha) + '</span></div><div class="a">' + eur(d.total) + '</div>' + (d._pend ? '<span class="chip pendiente">Guardando…</span>' : '<button class="btn sm yel" data-afac="' + d.id + '">' + ic('go') + 'Factura</button>') + '</div>';
     }).join('') : '<div class="empty" style="padding:20px"><b>Nada pendiente</b>Los presupuestos nuevos aparecerán aquí.</div>') + '</div>' +
     '</div>';
   $('#iper').onchange = function () { IPER = this.value; vInicio(); };
@@ -714,29 +721,35 @@ function cargarFoto(d) {
   return call('getFile', id).then(function (r) { if (r && r.ok) FOTOS[id] = 'data:' + r.mime + ';base64,' + r.data; }).catch(function () { });
 }
 /** Crea el PDF con el formato de siempre, lo descarga y guarda una copia en Drive. */
-function hacerPdf(d, guardarEnDrive) {
-  busy(true, 'Preparando el PDF…');
+/** Crea el PDF con el formato de siempre (devuelve el archivo, sin descargarlo). */
+function crearPdf(d) {
   return cargarPdfLib().then(function () { return cargarFoto(d); }).then(function () {
     var holder = document.createElement('div');
     holder.style.cssText = 'position:fixed;left:-10000px;top:0';
     holder.innerHTML = '<div class="doc">' + htmlDoc(d) + '</div>';
     document.body.appendChild(holder);
-    var el = holder.firstChild;
     var opt = { margin: 0, filename: nombrePdf(d), image: { type: 'jpeg', quality: 0.92 }, html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: 794 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['legacy'] } };
-    return html2pdf().set(opt).from(el).outputPdf('blob').then(function (blob) {
-      holder.remove();
-      descargar(blob, nombrePdf(d));
-      busy(false);
-      if (!guardarEnDrive || !d.id) return;
-      // La copia en Drive se sube por detrás: se puede seguir usando la app.
-      blobToB64(blob).then(function (b64) { return call('savePdf', d.id, b64, nombrePdf(d), d.tipo, d.fecha); }).then(function (r) {
-        if (r && r.ok) { var cur = docPorId(d.id); if (cur) cur.pdfId = r.pdfId; d.pdfId = r.pdfId; }
-        else toast('El PDF se descargó, pero no se pudo guardar la copia en Drive.', true);
-      }).catch(function () { });
-    }, function (e) { holder.remove(); throw e; });
+    return html2pdf().set(opt).from(holder.firstChild).outputPdf('blob').then(function (blob) { holder.remove(); return blob; }, function (e) { holder.remove(); throw e; });
+  });
+}
+/** Sube la copia del PDF a Drive por detrás. */
+function subirPdf(d, blob) {
+  return blobToB64(blob).then(function (b64) { return call('savePdf', d.id, b64, nombrePdf(d), d.tipo, d.fecha); }).then(function (r) {
+    if (r && r.ok) { var cur = docPorId(d.id); if (cur) cur.pdfId = r.pdfId; d.pdfId = r.pdfId; }
+    else toast('El PDF se descargó, pero no se pudo guardar la copia en Drive.', true);
+  }).catch(function () { });
+}
+/** Descarga el PDF y, si el documento ya está guardado, sube una copia a Drive. */
+function hacerPdf(d, guardarEnDrive) {
+  busy(true, 'Preparando el PDF…');
+  return crearPdf(d).then(function (blob) {
+    busy(false);
+    descargar(blob, nombrePdf(d));
+    if (guardarEnDrive && d.id && !d._pend) subirPdf(d, blob);
+    return blob;
   }).catch(function (e) { if (String(e && e.message) !== 'auth') toast('No se pudo crear el PDF.', true); })
-    .then(function () { busy(false); });
+    .then(function (b) { busy(false); return b; });
 }
 function imprimir(d) {
   cargarFoto(d).then(function () {
@@ -861,7 +874,7 @@ function pintarLineas() {
     });
     if (el.dataset.l === 'desc') el.addEventListener('change', function () {
       var p = conceptos()[el.value];
-      if (p !== undefined && !num(ED.lineas[i].precio)) { ED.lineas[i].precio = p; el.closest('.ln').querySelector('[data-l=precio]').value = p; el.closest('.ln').querySelector('.tot').textContent = eur(num(ED.lineas[i].cant) * p); refrescar(); }
+      if (p !== undefined && !num(ED.lineas[i].precio)) { ED.lineas[i].precio = p; var pin = el.closest('.ln').querySelector('[data-l=precio]'); pin.value = p; if (document.activeElement === pin) setTimeout(function () { pin.select(); }, 0); el.closest('.ln').querySelector('.tot').textContent = eur(num(ED.lineas[i].cant) * p); refrescar(); }
     });
   });
   $$('#lines [data-del]').forEach(function (b) {
@@ -916,33 +929,111 @@ function guardarDoc(conPdf) {
   if (!String(ED.cliente || '').trim()) { toast('Falta el nombre del cliente.', true); $('[data-k=cliente]').focus(); return; }
   var L = ED.lineas.filter(function (l) { return String(l.desc).trim() || num(l.precio); });
   if (!L.length) { toast('Añade al menos una línea.', true); return; }
+  pararMic();
   var payload = clone(ED);
   payload.lineas = L.map(function (l) { return { cant: num(l.cant), desc: String(l.desc).trim(), precio: num(l.precio) }; });
   payload.ivaPct = num(ED.ivaPct);
   if (payload.extra && payload.extra.validez !== undefined) payload.extra.validez = num(payload.extra.validez) || S.aj.validezDias;
-  if (ED._auto && !ED.id) payload.numero = '';
-  delete payload._auto;
-  var btns = $$('.savebar .btn'); btns.forEach(function (b) { b.disabled = true; });
-  busy(true, 'Guardando…');
-  call('saveDoc', payload).then(function (r) {
-    busy(false);
-    if (!r || !r.ok) { toast(msgErr(r), true); return; }
-    var i = S.docs.findIndex(function (d) { return d.id === r.doc.id; });
-    if (i >= 0) S.docs[i] = r.doc; else S.docs.push(r.doc);
-    if (r.doc.origenId) { var o = docPorId(r.doc.origenId); if (o) o.estado = 'facturado'; }
-    if (r.ajustes) S.aj = r.ajustes;
-    guardarClienteLocal(r.doc);
-    var doc = r.doc;
-    toast((doc.tipo === 'factura' ? 'Factura ' : 'Presupuesto ') + doc.numero + ' guardado');
-    HIST.tipo = doc.tipo; ir('historial');
-    // En segundo plano, sin hacer esperar: cliente y listado de Drive, y la copia del PDF.
-    call('despues', doc.id).then(function (x) {
-      if (x && x.listado && x.listado.err) toast('Factura ' + doc.numero + ' guardada, pero no se pudo apuntar en el listado: ' + x.listado.err, true);
-    }).catch(function () { });
-    if (conPdf) hacerPdf(doc, true);
-  }).catch(function (e) { busy(false); if (String(e && e.message) !== 'auth') toast('No se pudo guardar. Revisa la conexión.', true); })
-    .then(function () { btns.forEach(function (b) { b.disabled = false; }); });
+  if (!ED.id && ED._auto) payload.numero = siguienteNumero(ED.tipo, ED.fecha);   // cuenta también las que aún se están guardando
+  delete payload._auto; delete payload._pend;
+  if (!ED.id && S.docs.some(function (d) { return d.tipo === payload.tipo && String(d.numero) === String(payload.numero); })) { toast('Ya existe un documento con ese número.', true); return; }
+  // Se apunta ya en la app y se envía a Google por detrás: se puede seguir trabajando.
+  var local = clone(payload), t = calc(local);
+  local.id = ED.id || 'tmp-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  local.base = t.base; local.iva = t.iva; local.total = t.total; local.estado = local.estado || 'pendiente'; local._pend = true;
+  var i = S.docs.findIndex(function (d) { return d.id === local.id; });
+  if (i >= 0) S.docs[i] = local; else S.docs.push(local);
+  guardarClienteLocal(local);
+  var job = { kind: 'doc', localId: local.id, payload: payload, etiqueta: (local.tipo === 'factura' ? 'Factura ' : 'Presupuesto ') + local.numero };
+  encolar(job);
+  toast(job.etiqueta + ' guardándose… ya puedes seguir');
+  HIST.tipo = local.tipo; ir('historial');
+  if (conPdf) {
+    crearPdf(local).then(function (blob) { descargar(blob, nombrePdf(local)); job.pdfBlob = blob; if (job.hecho) subirPdf(docPorId(job.serverId) || local, blob); })
+      .catch(function () { toast('No se pudo crear el PDF. Descárgalo desde el historial.', true); });
+  }
 }
+
+/* =================== Cola de guardado (por detrás) =================== */
+var COLA = [], CORRIENDO = false;
+function encolar(job) { COLA.push(job); guardarCola(); pintarCola(); correrCola(); }
+function guardarCola() {
+  try { localStorage.setItem('gep_cola', JSON.stringify(COLA.filter(function (j) { return j.kind === 'doc'; }).map(function (j) { return { kind: j.kind, localId: j.localId, payload: j.payload, etiqueta: j.etiqueta, local: docPorId(j.localId) }; }))); } catch (e) { }
+}
+function recuperarCola() {
+  var g = []; try { g = JSON.parse(localStorage.getItem('gep_cola') || '[]'); } catch (e) { }
+  g.forEach(function (j) { if (j.local && !docPorId(j.localId)) S.docs.push(j.local); COLA.push({ kind: j.kind, localId: j.localId, payload: j.payload, etiqueta: j.etiqueta }); });
+  if (g.length) { pintarCola(); correrCola(); }
+}
+function pintarCola() {
+  var el = $('#cola'); if (!el) return;
+  var fallos = COLA.filter(function (j) { return j.fallo; }).length;
+  clearTimeout(pintarCola._t);
+  if (!COLA.length) {
+    if (el.classList.contains('hide')) return;
+    el.className = 'cola ok'; el.innerHTML = '✓ Todo guardado'; el.onclick = null;
+    pintarCola._t = setTimeout(function () { if (!COLA.length) el.className = 'cola hide'; }, 2500); return;
+  }
+  el.className = 'cola' + (fallos ? ' bad' : '');
+  el.innerHTML = fallos ? '⚠ ' + fallos + ' sin guardar · <u>reintentar</u>' : '<span class="mini-spin"></span> Guardando ' + COLA.length + '…';
+  el.onclick = fallos ? function () { COLA.forEach(function (j) { j.fallo = false; j.intentos = 0; }); pintarCola(); correrCola(); } : null;
+}
+function correrCola() {
+  if (CORRIENDO) return;
+  var job = COLA.filter(function (j) { return !j.fallo; })[0];
+  if (!job) { pintarCola(); return; }
+  CORRIENDO = true;
+  var p = job.kind === 'doc' ? enviarDoc(job) : enviarGasto(job);
+  p.then(function () {
+    COLA.splice(COLA.indexOf(job), 1); guardarCola();
+    CORRIENDO = false; pintarCola(); correrCola();
+  }, function (e) {
+    CORRIENDO = false;
+    if (String(e && e.message) === 'auth') { pintarCola(); return; }
+    job.intentos = (job.intentos || 0) + 1;
+    if (e && e.servidor && job.intentos >= 3) { job.fallo = true; toast(job.etiqueta + ': ' + (e.msg || 'no se pudo guardar'), true); pintarCola(); correrCola(); return; }
+    pintarCola();
+    setTimeout(correrCola, Math.min(30000, 2000 * Math.pow(2, job.intentos)));   // sin conexión: lo reintenta solo
+  });
+}
+function errServidor(r) { var e = new Error('servidor'); e.servidor = true; e.msg = msgErr(r); return e; }
+function enviarDoc(job) {
+  return call('saveDoc', job.payload).then(function (r) {
+    if (r && r.err === 'dup' && !job.payload.id) { job.payload.numero = ''; return call('saveDoc', job.payload); }
+    return r;
+  }).then(function (r) {
+    if (!r || !r.ok) throw errServidor(r);
+    var local = docPorId(job.localId), d = r.doc;
+    var i = S.docs.findIndex(function (x) { return x.id === job.localId; });
+    if (i >= 0) S.docs[i] = d; else S.docs.push(d);
+    if (d.origenId) { var o = docPorId(d.origenId); if (o) o.estado = 'facturado'; }
+    if (r.ajustes) S.aj = r.ajustes;
+    if (local && String(local.numero) !== String(d.numero)) toast(job.etiqueta + ' se ha guardado con el Nº ' + d.numero + ' (ese número ya existía)', true);
+    if (ED && ED.id === job.localId) { ED.id = d.id; ED.numero = d.numero; }
+    job.hecho = true; job.serverId = d.id;
+    call('despues', d.id).then(function (x) { if (x && x.listado && x.listado.err) toast('No se pudo apuntar la ' + job.etiqueta.toLowerCase() + ' en el listado: ' + x.listado.err, true); }).catch(function () { });
+    if (job.pdfBlob) subirPdf(d, job.pdfBlob);
+    refrescarVista();
+  });
+}
+function enviarGasto(job) {
+  var f = job.file;
+  var prep = job.prep || (job.prep = !f ? Promise.resolve(null) : (/^image\//.test(f.type) ? comprimir(f, 1800, 0.85).then(function (u) { return { name: f.name.replace(/\.[^.]+$/, '') + '.jpg', mime: 'image/jpeg', data: u.split(',')[1] }; })
+    : blobToB64(f).then(function (b) { return { name: f.name, mime: f.type || 'application/pdf', data: b }; })));
+  return prep.then(function (file) { return call('saveGasto', job.payload, file); }).then(function (r) {
+    if (!r || !r.ok) throw errServidor(r);
+    var i = S.gastos.findIndex(function (x) { return x.id === job.localId; });
+    if (i >= 0) S.gastos[i] = r.gasto; else S.gastos.push(r.gasto);
+    refrescarVista();
+  });
+}
+/** Repinta la pantalla actual al terminar un guardado (sin tocar formularios abiertos). */
+function refrescarVista() {
+  if (!$('#ov').classList.contains('hide')) return;
+  if (VIEW === 'historial') listaHist(); else if (VIEW === 'gastos') listaGastos(); else if (VIEW === 'inicio') vInicio();
+}
+window.addEventListener('beforeunload', function (e) { if (COLA.length) { e.preventDefault(); e.returnValue = ''; } });
+
 function guardarClienteLocal(d) {
   if (!d.cliente) return;
   var c = S.clientes.filter(function (x) { return x.nombre.toLowerCase() === d.cliente.toLowerCase(); })[0];
@@ -1101,14 +1192,15 @@ function listaHist() {
       return '<div class="it" data-id="' + d.id + '"><div class="num">Nº ' + esc(d.numero) + '<small>' + fCorta(d.fecha) + '</small></div>' +
         '<div class="who"><b>' + esc(d.cliente || 'Sin cliente') + '</b><span>' + esc((d.lineas || []).map(function (l) { return l.desc; }).filter(Boolean).join(' · ')) + (d.ivaPct === 0 ? ' · sin IVA' : '') + (d.extra && d.extra.notaInterna ? ' · ' + esc(d.extra.notaInterna) : '') + '</span></div>' +
         '<div class="amt">' + eur(d.total) + '</div>' +
-        '<div class="st"><select data-est aria-label="Estado">' + ESTADOS[d.tipo].map(function (e) { return '<option value="' + e[0] + '"' + (d.estado === e[0] ? ' selected' : '') + '>' + e[1] + '</option>'; }).join('') + '</select></div>' +
+        (d._pend ? '<div class="st"><span class="chip pendiente"><span class="mini-spin"></span> Guardando…</span></div><div class="acts"><button class="ib" data-a="pdf" title="Descargar PDF">' + ic('dl') + '</button></div></div>' : '') +
+        (d._pend ? '' : '<div class="st"><select data-est aria-label="Estado">' + ESTADOS[d.tipo].map(function (e) { return '<option value="' + e[0] + '"' + (d.estado === e[0] ? ' selected' : '') + '>' + e[1] + '</option>'; }).join('') + '</select></div>' +
         '<div class="acts">' +
         '<button class="ib" data-a="pdf" title="Descargar PDF">' + ic('dl') + '</button>' +
         '<button class="ib" data-a="edit" title="Editar">' + ic('edit') + '</button>' +
         '<button class="ib" data-a="dup" title="Duplicar">' + ic('copy') + '</button>' +
         (!fac && d.estado !== 'facturado' ? '<button class="ib y" data-a="fac" title="Pasar a factura">' + ic('go') + '</button>' : '') +
         '<button class="ib r" data-a="del" title="Eliminar">' + ic('del') + '</button>' +
-        '</div></div>';
+        '</div></div>');
     }).join('') + '</div>';
   if ($('#hBulk')) $('#hBulk').onclick = function () {
     var ids = L.filter(function (d) { return d.estado === 'pendiente'; }).map(function (d) { return d.id; });
@@ -1124,8 +1216,8 @@ function listaHist() {
   $$('#hlist .it').forEach(function (row) {
     var d = docPorId(row.dataset.id);
     var sel = row.querySelector('[data-est]');
-    sel.className = 'chip ' + d.estado;
-    sel.onchange = function () { cambiarEstado(d.id, sel.value).then(function () { sel.className = 'chip ' + sel.value; }); };
+    if (sel) sel.className = 'chip ' + d.estado;
+    if (sel) sel.onchange = function () { cambiarEstado(d.id, sel.value).then(function () { sel.className = 'chip ' + sel.value; }); };
     row.querySelectorAll('[data-a]').forEach(function (b) {
       b.onclick = function () {
         var a = b.dataset.a;
@@ -1175,8 +1267,9 @@ function listaGastos() {
         '<div class="who"><b>' + esc(g.proveedor || 'Sin proveedor') + '</b><span>' + esc(g.concepto) + '</span></div>' +
         '<div class="st"><span class="chip cat">' + esc(g.categoria || 'Otros') + '</span></div>' +
         '<div class="amt">' + eur(g.total) + '</div>' +
+        (g._pend ? '<div class="acts"><span class="chip pendiente"><span class="mini-spin"></span> Guardando…</span></div></div>' :
         '<div class="acts">' + (g.archivoId ? '<button class="ib" data-a="ver" title="Ver justificante">' + ic('clip') + '</button>' : '<button class="ib y" data-a="edit" title="Falta el justificante">' + ic('plus') + '</button>') +
-        '<button class="ib" data-a="edit" title="Editar">' + ic('edit') + '</button><button class="ib r" data-a="del" title="Eliminar">' + ic('del') + '</button></div></div>';
+        '<button class="ib" data-a="edit" title="Editar">' + ic('edit') + '</button><button class="ib r" data-a="del" title="Eliminar">' + ic('del') + '</button></div></div>');
     }).join('') + '</div>';
   $$('#glist .it').forEach(function (row) {
     var g = S.gastos.filter(function (x) { return x.id === row.dataset.id; })[0];
@@ -1248,21 +1341,15 @@ function formGasto(g) {
     if (!base) return toast('Falta el importe.', true);
     var data = { id: G.id, fecha: $('#gFecha').value, proveedor: $('#gProv').value, numFactura: $('#gNum').value, concepto: $('#gCon').value, categoria: $('#gCat').value,
       base: base, ivaPct: num($('#gIva').value), iva: r2(tot - base), pago: $('#gPago').value, notas: $('#gNotas').value, quitarArchivo: quitar };
-    var btn = this; btn.disabled = true;
-    var prep = !file ? Promise.resolve(null) : (/^image\//.test(file.type) ? comprimir(file, 1800, 0.85).then(function (u) { return { name: file.name.replace(/\.[^.]+$/, '') + '.jpg', mime: 'image/jpeg', data: u.split(',')[1] }; })
-      : blobToB64(file).then(function (b) { return { name: file.name, mime: file.type || 'application/pdf', data: b }; }));
-    busy(true, file ? 'Subiendo el justificante…' : 'Guardando…');
-    prep.then(function (f) {
-      return call('saveGasto', data, f);
-    }).then(function (r) {
-      if (!r || !r.ok) return toast(msgErr(r), true);
-      var i = S.gastos.findIndex(function (x) { return x.id === r.gasto.id; });
-      if (i >= 0) S.gastos[i] = r.gasto; else S.gastos.push(r.gasto);
-      closeModal(); toast('Gasto guardado');
-      if (!enRango(r.gasto.fecha, rango(GF.per))) GF.per = 'todo';
-      if (VIEW === 'gastos') vGastos(); else ir('gastos');
-    }).catch(function (e) { if (String(e && e.message) !== 'auth') toast('No se pudo guardar el gasto.', true); })
-      .then(function () { busy(false); btn.disabled = false; });
+    var local = clone(data); local.id = G.id || 'tmp-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    local.total = r2(base + data.iva); local._pend = true;
+    local.archivoId = data.quitarArchivo ? '' : (G.archivoId || ''); local.archivoNombre = file ? file.name : (data.quitarArchivo ? '' : (G.archivoNombre || ''));
+    var i = S.gastos.findIndex(function (x) { return x.id === local.id; });
+    if (i >= 0) S.gastos[i] = local; else S.gastos.push(local);
+    encolar({ kind: 'gasto', localId: local.id, payload: data, file: file, etiqueta: 'Gasto de ' + data.proveedor });
+    closeModal(); toast('Gasto guardándose… ya puedes seguir');
+    if (!enRango(local.fecha, rango(GF.per))) GF.per = 'todo';
+    if (VIEW === 'gastos') vGastos(); else ir('gastos');
   };
 }
 function verArchivo(id, nombre, sobreModal) {
